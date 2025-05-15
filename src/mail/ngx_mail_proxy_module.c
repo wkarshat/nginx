@@ -327,7 +327,9 @@ ngx_mail_proxy_pop3_handler(ngx_event_t *rev)
         c->log->action = NULL;
         ngx_log_error(NGX_LOG_INFO, c->log, 0, "client logged in");
 
-        if (s->buffer->pos < s->buffer->last) {
+        if (s->buffer->pos < s->buffer->last
+            || s->connection->read->ready)
+        {
             ngx_post_event(c->write, &ngx_posted_events);
         }
 
@@ -486,7 +488,9 @@ ngx_mail_proxy_imap_handler(ngx_event_t *rev)
         c->log->action = NULL;
         ngx_log_error(NGX_LOG_INFO, c->log, 0, "client logged in");
 
-        if (s->buffer->pos < s->buffer->last) {
+        if (s->buffer->pos < s->buffer->last
+            || s->connection->read->ready)
+        {
             ngx_post_event(c->write, &ngx_posted_events);
         }
 
@@ -821,7 +825,9 @@ ngx_mail_proxy_smtp_handler(ngx_event_t *rev)
         c->log->action = NULL;
         ngx_log_error(NGX_LOG_INFO, c->log, 0, "client logged in");
 
-        if (s->buffer->pos < s->buffer->last) {
+        if (s->buffer->pos < s->buffer->last
+            || s->connection->read->ready)
+        {
             ngx_post_event(c->write, &ngx_posted_events);
         }
 
@@ -890,7 +896,7 @@ ngx_mail_proxy_send_proxy_protocol(ngx_mail_session_t *s)
     u_char            *p;
     ssize_t            n, size;
     ngx_connection_t  *c;
-    u_char             buf[NGX_PROXY_PROTOCOL_MAX_HEADER];
+    u_char             buf[NGX_PROXY_PROTOCOL_V1_MAX_HEADER];
 
     s->connection->log->action = "sending PROXY protocol header to upstream";
 
@@ -898,7 +904,7 @@ ngx_mail_proxy_send_proxy_protocol(ngx_mail_session_t *s)
                    "mail proxy send PROXY protocol header");
 
     p = ngx_proxy_protocol_write(s->connection, buf,
-                                 buf + NGX_PROXY_PROTOCOL_MAX_HEADER);
+                                 buf + NGX_PROXY_PROTOCOL_V1_MAX_HEADER);
     if (p == NULL) {
         ngx_mail_proxy_internal_server_error(s);
         return NGX_ERROR;
@@ -1013,12 +1019,36 @@ ngx_mail_proxy_read_response(ngx_mail_session_t *s, ngx_uint_t state)
             break;
 
         case ngx_imap_passwd:
+
+            /*
+             * untagged CAPABILITY response (draft-crispin-imapv-16),
+             * known to be sent by SmarterMail and Gmail
+             */
+
+            if (p[0] == '*' && p[1] == ' ') {
+                p += 2;
+
+                while (p < b->last - 1) {
+                    if (p[0] == CR && p[1] == LF) {
+                        p += 2;
+                        break;
+                    }
+
+                    p++;
+                }
+
+                if (b->last - p < 4) {
+                    return NGX_AGAIN;
+                }
+            }
+
             if (ngx_strncmp(p, s->tag.data, s->tag.len) == 0) {
                 p += s->tag.len;
                 if (p[0] == 'O' && p[1] == 'K') {
                     return NGX_OK;
                 }
             }
+
             break;
         }
 
